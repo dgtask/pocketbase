@@ -15,6 +15,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
+	github.com/joho/godotenv v1.5.1
 	github.com/pocketbase/dbx v1.11.0
 	github.com/pocketbase/tygoja v0.0.0-20250812183945-97ffe055281f
 	github.com/spf13/cast v1.9.2

@@ -1,5 +1,23 @@
 # PocketBase with PostgresSQL
 
+**Usage**
+- 1.新项目go.mod新增：replace github.com/pocketbase/pocketbase => github.com/fondoger/pocketbase v0.30.0
+
+- 2.新增.env配置文件，新增环境变量`POSTGRES_URL`，值为PostgreSQL数据库连接URL
+    ```
+    POSTGRES_URL = "postgres://user:password@localhost:5432/mydb?sslmode=disable"
+    ```
+
+- 3.新增读取配置文件代码
+    ```go
+    import (
+        "github.com/joho/godotenv"
+    )
+    // load .env file
+	if err := godotenv.Load(); err != nil {
+		fmt.Printf("load .env file failed: %v\n", err)
+	}
+
 **Features**
 
 - ✅ PostgresSQL support

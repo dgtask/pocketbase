@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/fatih/color"
 	"github.com/pocketbase/pocketbase/cmd"
 	"github.com/pocketbase/pocketbase/core"
@@ -82,6 +84,11 @@ type Config struct {
 // then you'll have to manually call [PocketBase.Bootstrap].
 func New() *PocketBase {
 	_, isUsingGoRun := inspectRuntime()
+
+	// load .env file
+	if err := godotenv.Load(); err != nil {
+		fmt.Printf("load .env file failed: %v\n", err)
+	}
 
 	return NewWithConfig(Config{
 		DefaultDev: isUsingGoRun,
