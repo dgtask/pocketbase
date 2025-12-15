@@ -20,7 +20,7 @@
 
 **Features**
 
-- ✅ PostgresSQL support
+- ✅ PostgresSQL (v17+) support
 - ✅ Support horizontal scaling
 - ✅ Realtime events works normally with horizontal scaling
 - ✅ 100% test case pass rate across total 4701 unit tests
@@ -34,9 +34,6 @@ To demonstrate the horizontal scaling and realtime capabilities, I have deployed
 - Instance 2: [pocketbase-chat-02.mimimiao.com](https://pocketbase-chat-02.mimimiao.com)
 
 ![Realtime Chat Demo](./.github/chat-page-demo.png)
-
-> [!TIP]
-> The above demo app is free hosted on ClawCloud Run and Neon DB, see [Free Hosting Guide](https://github.com/fondoger/pocketbase/tree/realtime-demo) for more details.
 
 **Get Started**
 
@@ -225,9 +222,11 @@ linux   386
 linux   amd64
 linux   arm
 linux   arm64
+linux   loong64
 linux   ppc64le
 linux   riscv64
 linux   s390x
+windows 386
 windows amd64
 windows arm64
 ```

@@ -198,25 +198,25 @@ func buildResolversExpr(
 		expr = dbx.NewExp(fmt.Sprintf("%s < %s", left.Identifier, right.Identifier), mergeParams(left.Params, right.Params))
 		*/
 		// PostgreSQL:
-		expr = dbx.NewExp(numericJoin(left, "<", right), mergeParams(left.Params, right.Params))
+		expr = resolveOrderingExpr("<", left, right)
 	case fexpr.SignLte, fexpr.SignAnyLte:
 		/* SQLite:
 		expr = dbx.NewExp(fmt.Sprintf("%s <= %s", left.Identifier, right.Identifier), mergeParams(left.Params, right.Params))
 		*/
 		// PostgreSQL:
-		expr = dbx.NewExp(numericJoin(left, "<=", right), mergeParams(left.Params, right.Params))
+		expr = resolveOrderingExpr("<=", left, right)
 	case fexpr.SignGt, fexpr.SignAnyGt:
 		/* SQLite:
 		expr = dbx.NewExp(fmt.Sprintf("%s > %s", left.Identifier, right.Identifier), mergeParams(left.Params, right.Params))
 		*/
 		// PostgreSQL:
-		expr = dbx.NewExp(numericJoin(left, ">", right), mergeParams(left.Params, right.Params))
+		expr = resolveOrderingExpr(">", left, right)
 	case fexpr.SignGte, fexpr.SignAnyGte:
 		/* SQLite:
 		expr = dbx.NewExp(fmt.Sprintf("%s >= %s", left.Identifier, right.Identifier), mergeParams(left.Params, right.Params))
 		*/
 		// PostgreSQL:
-		expr = dbx.NewExp(numericJoin(left, ">=", right), mergeParams(left.Params, right.Params))
+		expr = resolveOrderingExpr(">=", left, right)
 	}
 
 	if expr == nil {
@@ -518,6 +518,48 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 }
 
 // PostgreSQL only:
+func resolveOrderingExpr(op string, l, r *ResolverResult) dbx.Expression {
+	left := l.Identifier
+	right := r.Identifier
+	lType := inferDeterministicType(l)
+	rType := inferDeterministicType(r)
+
+	// If both sides have different deterministic types, try to convert one side to the other side's type.
+	// Eg:
+	// - jsonb('2025') > 2024   => Invalid, Convert to numeric
+	if lType != "" && rType != "" && lType != rType {
+		// If either type is numeric, convert to numeric
+		if lType == "numeric" {
+			right = withNonJsonbType(right, "numeric")
+		} else if rType == "numeric" {
+			left = withNonJsonbType(left, "numeric")
+		} else {
+			// Otherwise, convert both sides to text type for comparison.
+			//
+			// Possible cases:
+			// - date vs non-numeric:  '2025-05-01'::date > '2025-05-01'::text
+			// - bool vs non-numeric:  true > 'true'::text
+			// - text vs non-numeric:  'abc'::text > '2025-05-01'::date
+			// - jsonb vs non-numeric: to_jsonb('abc') > '2025-05-01'::text
+			//
+			// We cannot cast date, bool, text, jsonb types to numeric types. (false::numeric throws errors)
+			// So we simply cast both sides to text type for comparison.
+			//
+			// Note: we cannot simply use `to_jsonb()` here to erase the type because
+			// jsonb does byte-wise comparison instead of semantic comparison. Eg:
+			// to_jsonb('2026'::text) < to_jsonb(2026)  => Valid, returns false
+			left = withNonJsonbType(left, "text")
+			right = withNonJsonbType(right, "text")
+		}
+	}
+
+	return dbx.NewExp(
+		fmt.Sprintf("%s %s %s", left, op, right),
+		mergeParams(l.Params, r.Params),
+	)
+}
+
+// PostgreSQL only:
 // PostgreSQL lets us write '2024-09-03' and use it as a date, timestamp, text, etc., without explicit casts every time.
 // Normally, when we use `SELECT col_text = 'abc'`, the type of 'abc' can be automatically infered to `text`.
 // However, when used with `to_jsonb('abc')` function, the type of 'abc' is not determistic, because to_jsonb() can
@@ -530,7 +572,7 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 //
 // Only used with `to_jsonb`
 func castToJsonb(identifier *ResolverResult) string {
-	if strings.ToLower(identifier.Identifier) == "null" {
+	if isNullIdentifier(identifier) {
 		return "to_jsonb(NULL::text)"
 	}
 	if tp := inferPolymorphicLiteral(identifier); tp != "" {
@@ -544,11 +586,13 @@ func castToJsonb(identifier *ResolverResult) string {
 // 2. text    -> Undetermine Polymorphic Type, can be Date, TimeStamp, text, etc.
 // 3. numbers -> Deterministic type, always numeric, no type cast needed
 // 4. bool    -> Deterministic type, always boolean, no type cast needed
+//
+// Only NULL and text types are considered polymorphic types.
 func inferPolymorphicLiteral(result *ResolverResult) string {
 	// Note: result cannot be "NULL" identifier when called in [inferPolymorphicLiteral],
 	// because we already handled "NULL" seperately before calling this function.
 	// See [resolveEqualExpr] for details.
-	if strings.ToLower(result.Identifier) == "null" {
+	if isNullIdentifier(result) {
 		return "null"
 	}
 
@@ -578,6 +622,7 @@ func inferDeterministicType(result *ResolverResult) string {
 	// If there is a explict type cast suffix, then we can use it to determine the type.
 	match := regexRightMostTypeCast.FindStringSubmatch(strings.TrimRight(result.Identifier, " "))
 	if len(match) > 0 {
+		// can be any explict type: "text", "jsonb", "numeric", etc.
 		return match[1]
 	}
 
@@ -628,6 +673,13 @@ func typeAwareJoinNoCoalesce(l *ResolverResult, op string, r *ResolverResult) st
 	}
 	// If none of the identifiers have type cast
 	if len(leftType) == 0 && len(rightType) == 0 {
+		// Handle special cases:
+		// `PREPARE statement AS SELECT null IS DISTINCT FROM $1` will throw error: "could not determine data type of parameter $1"
+		if isNullIdentifier(l) && inferPolymorphicLiteral(r) == "text" {
+			right = withNonJsonbType(right, "text")
+		} else if isNullIdentifier(r) && inferPolymorphicLiteral(l) == "text" {
+			left = withNonJsonbType(left, "text")
+		}
 		return fmt.Sprintf("%s %s %s", left, op, right)
 	}
 	if len(leftType) > 0 {
@@ -647,24 +699,6 @@ func typeAwareJoinNoCoalesce(l *ResolverResult, op string, r *ResolverResult) st
 		return fmt.Sprintf("%s %s %s", left, op, right)
 	}
 	panic("should not reach here")
-}
-
-// PostgreSQL only:
-// Force cast both identifiers to numeric type.
-func numericJoin(l *ResolverResult, op string, r *ResolverResult) string {
-	left := l.Identifier
-	right := r.Identifier
-
-	// Note: Polyphormic literal such as "2" can be automatic casted to numeric type by PostgreSQL.
-	// Eg: SELECT "2" > 1  -- works fine.
-	if inferDeterministicType(l) != "numeric" && inferPolymorphicLiteral(l) == "" {
-		left = withNonJsonbType(left, "numeric")
-	}
-	if inferDeterministicType(r) != "numeric" && inferPolymorphicLiteral(r) == "" {
-		right = withNonJsonbType(right, "numeric")
-	}
-
-	return fmt.Sprintf("%s %s %s", left, op, right)
 }
 
 // PostgreSQL only:
@@ -707,6 +741,10 @@ func isKnownNonEmptyIdentifier(result *ResolverResult) bool {
 	}
 
 	return len(result.Params) > 0 && !hasEmptyParamValue(result) && !isEmptyIdentifier(result)
+}
+
+func isNullIdentifier(result *ResolverResult) bool {
+	return strings.EqualFold(result.Identifier, "null")
 }
 
 func isEmptyIdentifier(result *ResolverResult) bool {
